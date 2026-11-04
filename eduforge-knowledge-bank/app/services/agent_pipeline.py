@@ -7,6 +7,7 @@ No web crawling or automatic publication occurs in this milestone.
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 import httpx
@@ -20,14 +21,22 @@ from app.schemas.learning import LearningGenerateRequest
 from app.services.retrieval import retrieve_hybrid, hit_to_dict
 
 
+logger = logging.getLogger(__name__)
+
+
 def _call_agent(role: str, instructions: str, payload: dict[str, Any]) -> str:
     settings = get_settings()
 
-    if not settings.llm_api_key or not settings.llm_api_key.get_secret_value().strip():
+    if (
+        not settings.llm_api_key
+        or not settings.llm_api_key.get_secret_value().strip()
+    ):
         raise HTTPException(
             status_code=503,
             detail="AI agents are not configured. Set LLM_API_KEY.",
         )
+
+    api_key = settings.llm_api_key.get_secret_value()
 
     body = {
         "model": settings.llm_model,
@@ -48,9 +57,7 @@ def _call_agent(role: str, instructions: str, payload: dict[str, Any]) -> str:
         response = httpx.post(
             f"{settings.llm_base_url.rstrip('/')}/chat/completions",
             headers={
-                "Authorization": (
-                    f"Bearer {settings.llm_api_key.get_secret_value()}"
-                ),
+                "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
             },
             json=body,
@@ -58,6 +65,7 @@ def _call_agent(role: str, instructions: str, payload: dict[str, Any]) -> str:
         )
 
         response.raise_for_status()
+
         data = response.json()
         content = data["choices"][0]["message"]["content"]
 
@@ -75,13 +83,49 @@ def _call_agent(role: str, instructions: str, payload: dict[str, Any]) -> str:
 
         return content
 
+    except httpx.HTTPStatusError as exc:
+        # Log provider error details without logging credentials or request headers.
+        error_body = exc.response.text[:2000]
+        error_body = error_body.replace(api_key, "[REDACTED]")
+
+        logger.error(
+            "LLM provider rejected request: agent=%s status=%s model=%s body=%s",
+            role,
+            exc.response.status_code,
+            settings.llm_model,
+            error_body,
+        )
+
+        raise HTTPException(
+            status_code=502,
+            detail=f"{role} agent failed: provider HTTP {exc.response.status_code}",
+        ) from exc
+
+    except httpx.RequestError as exc:
+        logger.error(
+            "LLM provider connection failed: agent=%s error_type=%s model=%s",
+            role,
+            type(exc).__name__,
+            settings.llm_model,
+        )
+
+        raise HTTPException(
+            status_code=502,
+            detail=f"{role} agent failed: {type(exc).__name__}",
+        ) from exc
+
     except (
-        httpx.HTTPError,
         KeyError,
         IndexError,
         TypeError,
         ValueError,
     ) as exc:
+        logger.error(
+            "LLM response processing failed: agent=%s error_type=%s",
+            role,
+            type(exc).__name__,
+        )
+
         raise HTTPException(
             status_code=502,
             detail=f"{role} agent failed: {type(exc).__name__}",
