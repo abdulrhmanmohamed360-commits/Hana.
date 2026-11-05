@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 from pathlib import Path
-from urllib.parse import quote, urljoin, urlsplit, parse_qs
+from urllib.parse import quote, urlsplit, parse_qs
 
 import httpx
 
@@ -82,13 +82,13 @@ def create_signed_upload(
     content_type: str = "application/octet-stream",
 ) -> tuple[str, str]:
     """
-    Create a short-lived Supabase signed upload URL.
+    Create a temporary signed upload URL.
 
     Returns:
         (object_path, signed_upload_url)
 
-    The service-role key never leaves the backend.
-    The client must upload the file using PUT and the correct Content-Type.
+    The service-role key is used only on the backend.
+    The client uploads directly to Supabase using PUT.
     """
     base, key, bucket = _credentials(settings)
     object_path = _new_object_path(original_name)
@@ -101,7 +101,11 @@ def create_signed_upload(
     try:
         response = httpx.post(
             endpoint,
-            headers=_headers(key),
+            headers={
+                **_headers(key),
+                "Content-Type": "application/json",
+            },
+            json={"upsert": False},
             timeout=settings.supabase_upload_timeout_seconds,
         )
         response.raise_for_status()
@@ -112,14 +116,25 @@ def create_signed_upload(
             "Could not create a Supabase signed upload URL"
         ) from exc
 
-    returned_url = payload.get("url") or payload.get("signedURL")
+    returned_url = (
+        payload.get("url")
+        or payload.get("signedURL")
+        or payload.get("signedUrl")
+    )
 
     if not isinstance(returned_url, str) or not returned_url.strip():
         raise StorageError(
             "Supabase returned an invalid signed upload URL"
         )
 
-    upload_url = urljoin(base + "/", returned_url.lstrip("/"))
+    if returned_url.startswith(("http://", "https://")):
+        upload_url = returned_url
+    elif returned_url.startswith("/storage/v1/"):
+        upload_url = base + returned_url
+    elif returned_url.startswith("/"):
+        upload_url = f"{base}/storage/v1{returned_url}"
+    else:
+        upload_url = f"{base}/storage/v1/{returned_url.lstrip('/')}"
 
     base_parts = urlsplit(base)
     upload_parts = urlsplit(upload_url)
@@ -203,4 +218,4 @@ def download_object(
         raise StorageError(
             "Could not download the stored document"
         ) from exc
-            
+    
