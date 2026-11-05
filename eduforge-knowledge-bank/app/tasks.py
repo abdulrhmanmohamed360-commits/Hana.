@@ -1,5 +1,5 @@
 
-"""Celery application and persistent ingestion worker."""
+"""Persistent background tasks for EduForge Knowledge Core."""
 from __future__ import annotations
 
 import tempfile
@@ -7,40 +7,29 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from celery import Celery
 from sqlalchemy import select
+from sqlalchemy.orm import sessionmaker
 
 from app.core.config import get_settings
+from app.celery_app import celery_app
 from app.db.session import build_engine
-from app.models import IngestionJob, KnowledgeChunk, RawDocument, Source
-from app.models.enums import DocumentStatus, SourcePolicy, TaskStatus
+from app.models import (
+    IngestionJob,
+    KnowledgeChunk,
+    RawDocument,
+    Source,
+)
+from app.models.enums import (
+    DocumentStatus,
+    SourcePolicy,
+    TaskStatus,
+)
 from app.services.ingestion import content_hash, extract_segments
 from app.services.chunking import TextSegment, chunk_segments
 from app.services.storage import download_object
 
+
 settings = get_settings()
-
-celery_app = Celery(
-    "eduforge",
-    broker=settings.redis_url,
-    backend=settings.redis_url,
-)
-
-celery_app.conf.update(
-    task_acks_late=True,
-    task_reject_on_worker_lost=True,
-    worker_prefetch_multiplier=1,
-    task_track_started=True,
-    task_serializer="json",
-    accept_content=["json"],
-    result_serializer="json",
-    broker_connection_retry_on_startup=True,
-    task_routes={
-        "app.tasks.process_ingestion": {"queue": "ingestion"},
-        "app.tasks.run_preparation_job": {"queue": "research"},
-        "app.tasks.run_learning_scan": {"queue": "research"},
-    },
-)
 
 
 @celery_app.task(
@@ -50,8 +39,6 @@ celery_app.conf.update(
 )
 def process_ingestion(self, job_id: str) -> dict:
     """Process a document from local storage or private Supabase Storage."""
-    from sqlalchemy.orm import sessionmaker
-
     engine = build_engine(settings.database_url)
     Session = sessionmaker(bind=engine, expire_on_commit=False)
 
@@ -328,7 +315,6 @@ def process_ingestion(self, job_id: str) -> dict:
 @celery_app.task(name="app.tasks.scan_knowledge_gaps")
 def scan_knowledge_gaps() -> dict:
     """Periodic curriculum coverage scan."""
-    from sqlalchemy.orm import sessionmaker
     from app.services.growth import create_research_tasks
 
     engine = build_engine(settings.database_url)
@@ -352,7 +338,6 @@ def scan_knowledge_gaps() -> dict:
 @celery_app.task(name="app.tasks.process_pending_research")
 def process_pending_research(batch_size: int = 5) -> dict:
     """Drain a bounded batch of persistent research tasks."""
-    from sqlalchemy.orm import sessionmaker
     from app.models.ops import ResearchTask
     from app.services.growth import execute_research_task
 
@@ -411,7 +396,6 @@ def process_pending_research(batch_size: int = 5) -> dict:
 )
 def run_preparation_job(job_id: str) -> dict:
     """Execute one persistent preparation job."""
-    from sqlalchemy.orm import sessionmaker
     from app.agents.llm import build_llm
     from app.services.embeddings import build_embedder
     from app.services.preparation_jobs import run_job
@@ -440,7 +424,6 @@ def run_preparation_job(job_id: str) -> dict:
 @celery_app.task(name="app.tasks.process_pending_preparations")
 def process_pending_preparations(batch_size: int = 3) -> dict:
     """Recover and dispatch pending or stale preparation jobs."""
-    from sqlalchemy.orm import sessionmaker
     from app.services.preparation_jobs import (
         pending_job_ids,
         requeue_stale,
@@ -473,7 +456,6 @@ def process_pending_preparations(batch_size: int = 3) -> dict:
 )
 def run_learning_scan(scan_id: str) -> dict:
     """Execute one continuous-learning scan."""
-    from sqlalchemy.orm import sessionmaker
     from app.services.continuous_learning import run_scan
 
     engine = build_engine(settings.database_url)
@@ -495,7 +477,6 @@ def run_learning_scan(scan_id: str) -> dict:
 @celery_app.task(name="app.tasks.process_learning_schedules")
 def process_learning_schedules() -> dict:
     """Create scans for due schedules and dispatch pending scans."""
-    from sqlalchemy.orm import sessionmaker
     from app.services.continuous_learning import (
         pending_scan_ids,
         run_due_schedules,
@@ -524,7 +505,6 @@ def process_learning_schedules() -> dict:
 @celery_app.task(name="app.tasks.embed_pending_chunks")
 def embed_pending_chunks_task(batch_size: int = 64) -> dict:
     """Embed chunks that have no vector yet."""
-    from sqlalchemy.orm import sessionmaker
     from app.services.embeddings import (
         build_embedder,
         embed_pending_chunks,
@@ -553,33 +533,4 @@ def embed_pending_chunks_task(batch_size: int = 64) -> dict:
 
     finally:
         engine.dispose()
-
-
-celery_app.conf.beat_schedule = {
-    "process-preparation-jobs-every-minute": {
-        "task": "app.tasks.process_pending_preparations",
-        "schedule": 60,
-        "options": {"queue": "research"},
-    },
-    "learning-schedules-every-15-minutes": {
-        "task": "app.tasks.process_learning_schedules",
-        "schedule": 15 * 60,
-        "options": {"queue": "research"},
-    },
-    "embed-pending-chunks-every-ten-minutes": {
-        "task": "app.tasks.embed_pending_chunks",
-        "schedule": 10 * 60,
-        "options": {"queue": "research"},
-    },
-    "scan-knowledge-gaps-every-day": {
-        "task": "app.tasks.scan_knowledge_gaps",
-        "schedule": 24 * 60 * 60,
-        "options": {"queue": "research"},
-    },
-    "process-research-queue-every-five-minutes": {
-        "task": "app.tasks.process_pending_research",
-        "schedule": 5 * 60,
-        "options": {"queue": "research"},
-    },
-                        }
-                    
+                
