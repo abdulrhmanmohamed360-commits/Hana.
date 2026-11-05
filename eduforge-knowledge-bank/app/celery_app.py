@@ -20,14 +20,26 @@ celery_app.conf.update(
     task_serializer="json",
     accept_content=["json"],
     result_serializer="json",
+
     timezone="UTC",
     enable_utc=True,
+
     task_track_started=True,
     task_acks_late=True,
     worker_prefetch_multiplier=1,
     task_reject_on_worker_lost=True,
     broker_connection_retry_on_startup=True,
     result_expires=3600,
+
+    # Task queues
+    task_default_queue="default",
+    task_routes={
+        "app.tasks.process_ingestion": {"queue": "ingestion"},
+        "app.tasks.scan_knowledge_gaps": {"queue": "research"},
+        "app.tasks.process_pending_research": {"queue": "research"},
+    },
+
+    # Periodic background jobs
     beat_schedule={
         "scan-knowledge-gaps-periodically": {
             "task": "app.tasks.scan_knowledge_gaps",
@@ -45,6 +57,9 @@ celery_app.conf.update(
             "task": "app.tasks.process_learning_schedules",
             "schedule": crontab(minute="*/15"),
         },
+        "embed-pending-chunks-periodically": {
+            "task": "app.tasks.embed_pending_chunks",
+            "schedule": crontab(minute="*/10"),
+        },
     },
 )
-
