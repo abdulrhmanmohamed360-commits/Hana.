@@ -1,0 +1,27 @@
+# Runtime dependencies
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.30,<1.0
+pydantic>=2.8,<3.0
+pydantic-settings>=2.4,<3.0
+sqlalchemy>=2.0.30,<2.1
+alembic>=1.13,<2.0
+psycopg[binary]>=3.2,<4.0
+pgvector>=0.3,<1.0
+redis>=5.0,<6.0
+celery[redis]==5.4.0
+kombu==5.4.2
+packaging>=24.0,<27.0
+pypdf>=5.0,<7.0
+beautifulsoup4>=4.12,<5.0
+python-multipart>=0.0.9,<1.0
+httpx>=0.27,<1.0
+sympy>=1.12,<2.0
+
+# Document intelligence (extraction + OCR). System packages (tesseract, ara/eng data) are installed in the Dockerfile.
+pymupdf>=1.24,<2.0
+python-docx>=1.1,<2.0
+openpyxl>=3.1,<4.0
+python-pptx>=1.0,<2.0
+pytesseract>=0.3.10,<1.0
+Pillow>=10.3,<12.0
+lxml>=5.0,<7.0
